@@ -1,23 +1,5 @@
 import asyncio
 import websockets
-
-clients = set()
-
-async def handle(ws):
-    clients.add(ws)
-    try:
-        async for msg in ws:
-            await asyncio.gather(*[
-                c.send(msg) for c in clients if c != ws
-            ])
-    except websockets.exceptions.ConnectionClosed:
-        pass
-    finally:
-        clients.remove(ws)
-
-async def main():
-    import asyncio
-import websockets
 import os
 
 clients = set()
@@ -25,42 +7,45 @@ clients = set()
 async def handle_ws(ws):
     clients.add(ws)
     try:
-        async for msg in ws:
+        async for message in ws:
+            # Broadcast to everyone except sender
             await asyncio.gather(*[
-                c.send(msg) for c in clients if c != ws
+                c.send(message) for c in clients if c != ws
             ])
     finally:
         clients.remove(ws)
 
-# NEW: HTTP handler for Render health checks
-async def handle_http(reader, writer):
-    response = (
-        "HTTP/1.1 200 OK\r\n"
-        "Content-Type: text/plain\r\n"
-        "Content-Length: 2\r\n"
-        "\r\n"
-        "OK"
-    )
-    writer.write(response.encode())
-    await writer.drain()
-    writer.close()
+# Handle HTTP requests (Render health checks)
+async def process_request(path, request_headers):
+    method = request_headers.get("Method", "")
+
+    # Render sends HEAD and GET / for health checks
+    if "Upgrade" not in request_headers:
+        body = b"OK"
+        return (
+            200,
+            [
+                ("Content-Type", "text/plain"),
+                ("Content-Length", str(len(body)))
+            ],
+            body
+        )
+
+    # Otherwise continue to WebSocket handshake
+    return None
 
 async def main():
-    PORT = int(os.environ.get("PORT", 6789))
+    PORT = int(os.environ.get("PORT", 10000))
 
-    # Start WebSocket server
-    ws_server = websockets.serve(handle_ws, "0.0.0.0", PORT)
+    print(f"Starting server on port {PORT}...")
 
-    # Start HTTP health check server
-    http_server = asyncio.start_server(handle_http, "0.0.0.0", PORT)
-
-    print(f"Running on port {PORT}...")
-
-    await asyncio.gather(ws_server, http_server)
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    async with websockets.serve(
+        handle_ws,
+        "0.0.0.0",
+        PORT,
+        process_request=process_request
+    ):
+        await asyncio.Future()  # run forever
 
 if __name__ == "__main__":
-
     asyncio.run(main())
