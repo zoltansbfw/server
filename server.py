@@ -1,6 +1,5 @@
 import asyncio
-import websockets
-from websockets.server import serve
+from websockets import serve
 import os
 import json
 from datetime import datetime
@@ -93,3 +92,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
