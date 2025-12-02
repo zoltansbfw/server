@@ -46,6 +46,11 @@ async def main():
     async with server:
         await server.serve_forever()
 
+async def broadcast(obj, exclude_ws=None):
+    msg = json.dumps(obj)
+    await asyncio.gather(*[c.send(msg) for c in clients if c != exclude_ws], return_exceptions=True)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
+
