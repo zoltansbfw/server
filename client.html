@@ -13,7 +13,7 @@
   <script>
     const c = document.getElementById("c");
     const m = document.getElementById("m");
-    const ws = new WebSocket("ws://localhost:6789");
+    const ws = new WebSocket("wss://server-qge4.onrender.com");
 
     ws.onmessage = e => c.value += e.data + "\n";
 
@@ -28,3 +28,4 @@
 </body>
 
 </html>
+
