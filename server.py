@@ -1,24 +1,51 @@
 import asyncio
 import websockets
+import os
 
 clients = set()
 
-async def handle(ws):
+async def websocket_handler(ws):
     clients.add(ws)
     try:
         async for msg in ws:
             await asyncio.gather(*[
                 c.send(msg) for c in clients if c != ws
             ])
-    except websockets.exceptions.ConnectionClosed:
-        pass
     finally:
         clients.remove(ws)
 
+
+async def connection_handler(reader, writer):
+    # Peek at the first HTTP line
+    request_line = await reader.readline()
+    line = request_line.decode().strip()
+
+    # If Render sends HEAD / or GET / (health check)
+    if line.startswith("HEAD") or (line.startswith("GET") and "Upgrade: websocket" not in line):
+        response = (
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Type: text/plain\r\n"
+            "Content-Length: 2\r\n"
+            "\r\n"
+            "OK"
+        )
+        writer.write(response.encode())
+        await writer.drain()
+        writer.close()
+        return
+
+    # Otherwise: this *is* a WebSocket handshake → pass to websockets
+    ws_server = websockets.server.ServerConnection(websocket_handler)
+    await ws_server.handler(reader, writer)
+
+
 async def main():
-    async with websockets.serve(handle, "localhost", 6789):
-        print("Server running at ws://localhost:6789")
-        await asyncio.Future()  # Run forever
+    PORT = int(os.environ.get("PORT", 10000))
+    server = await asyncio.start_server(connection_handler, "0.0.0.0", PORT)
+    print(f"Server running on port {PORT}")
+    async with server:
+        await server.serve_forever()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
