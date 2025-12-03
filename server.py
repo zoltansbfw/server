@@ -5,14 +5,17 @@ import os
 clients = set()
 
 async def websocket_handler(ws):
+    print("Client connected!")
     clients.add(ws)
     try:
         async for msg in ws:
+            print("Received:", msg)
             await asyncio.gather(*[
                 c.send(msg) for c in clients if c != ws
             ], return_exceptions=True)
     finally:
         clients.remove(ws)
+        print("Client disconnected.")
 
 async def connection_handler(reader, writer):
     # Read headers
@@ -76,3 +79,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
