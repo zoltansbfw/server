@@ -1,6 +1,8 @@
 import asyncio
 import websockets
 import os
+async with websockets.serve(handle, "0.0.0.0", int(os.environ.get("PORT", 10000))):
+
 
 clients = set()
 
@@ -62,5 +64,6 @@ async def handle(ws):
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
