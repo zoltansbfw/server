@@ -36,12 +36,11 @@ async def main():
     PORT = int(os.environ.get("PORT", 10000))
     # 'ws://0.0.0.0:{PORT}'
     
-    # This is the correct way to run a websockets server:
-    async with websockets.server.serve(handler, "0.0.0.0", PORT):
+    # Corrected usage: serve is directly under the websockets module
+    async with websockets.serve(handler, "0.0.0.0", PORT):
         print(f"Server running on port {PORT}")
         await asyncio.Future()  # Run forever
 
 if __name__ == "__main__":
-    # Handle Ctrl+C gracefully
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(main())
+    # Corrected usage: Use asyncio.run() to manage the event loop
+    asyncio.run(main())
