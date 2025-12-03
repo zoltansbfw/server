@@ -1,78 +1,47 @@
 import asyncio
 import websockets
 import os
+import signal
 
+# Set of connected clients
 clients = set()
 
-async def websocket_handler(ws):
-    clients.add(ws)
+async def register(websocket):
+    """Registers a client connection."""
+    clients.add(websocket)
+    print(f"Client connected. Total clients: {len(clients)}")
+
+async def unregister(websocket):
+    """Unregisters a client connection."""
+    clients.remove(websocket)
+    print(f"Client disconnected. Total clients: {len(clients)}")
+
+async def consumer_handler(websocket):
+    """Handles messages received from a client and broadcasts them."""
+    async for message in websocket:
+        # Broadcast the message to all other connected clients
+        await asyncio.gather(*[
+            client.send(message) for client in clients if client != websocket
+        ], return_exceptions=True)
+
+async def handler(websocket):
+    """Main handler that manages connection lifecycle."""
+    await register(websocket)
     try:
-        async for msg in ws:
-            await asyncio.gather(*[
-                c.send(msg) for c in clients if c != ws
-            ], return_exceptions=True)
+        await consumer_handler(websocket)
     finally:
-        clients.remove(ws)
-
-async def connection_handler(reader, writer):
-    # Read headers
-    headers = []
-    while True:
-        line = await reader.readline()
-        if not line:
-            break
-        decoded = line.decode().strip()
-        if decoded == "":
-            break
-        headers.append(decoded)
-
-    if not headers:
-        writer.close()
-        return
-
-    request_line = headers[0]
-
-    # ---- HEALTH CHECK ----
-    if request_line.startswith("HEAD") or request_line.startswith("GET / ") and \
-       not any("Upgrade: websocket" in h for h in headers):
-        response = (
-            "HTTP/1.1 200 OK\r\n"
-            "Content-Type: text/plain\r\n"
-            "Content-Length: 2\r\n"
-            "\r\n"
-            "OK"
-        )
-        writer.write(response.encode())
-        await writer.drain()
-        writer.close()
-        return
-
-    # ---- WEBSOCKET REQUEST ----
-    if any("Upgrade: websocket" in h for h in headers):
-        ws_server = websockets.server.ServerConnection(websocket_handler)
-        await ws_server.handler(reader, writer)
-        return
-
-    # ---- UNKNOWN REQUEST: return OK ----
-    response = (
-        "HTTP/1.1 200 OK\r\n"
-        "Content-Type: text/plain\r\n"
-        "Content-Length: 2\r\n"
-        "\r\n"
-        "OK"
-    )
-    writer.write(response.encode())
-    await writer.drain()
-    writer.close()
-
+        await unregister(websocket)
 
 async def main():
     PORT = int(os.environ.get("PORT", 10000))
-    server = await asyncio.start_server(connection_handler, "0.0.0.0", PORT)
-    print(f"Server running on port {PORT}")
-    async with server:
-        await server.serve_forever()
-
+    # 'ws://0.0.0.0:{PORT}'
+    
+    # This is the correct way to run a websockets server:
+    async with websockets.server.serve(handler, "0.0.0.0", PORT):
+        print(f"Server running on port {PORT}")
+        await asyncio.Future()  # Run forever
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    # Handle Ctrl+C gracefully
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(main())
