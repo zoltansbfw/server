@@ -8,20 +8,33 @@ async def websocket_handler(ws):
     clients.add(ws)
     try:
         async for msg in ws:
-            # broadcast to every other client
             await asyncio.gather(*[
                 c.send(msg) for c in clients if c != ws
             ], return_exceptions=True)
     finally:
         clients.remove(ws)
 
-
 async def connection_handler(reader, writer):
-    request_line = await reader.readline()
-    line = request_line.decode().strip()
+    # Read headers
+    headers = []
+    while True:
+        line = await reader.readline()
+        if not line:
+            break
+        decoded = line.decode().strip()
+        if decoded == "":
+            break
+        headers.append(decoded)
 
-    # Render health check (GET / or HEAD /)
-    if line.startswith("HEAD") or (line.startswith("GET") and "Upgrade: websocket" not in line):
+    if not headers:
+        writer.close()
+        return
+
+    request_line = headers[0]
+
+    # ---- HEALTH CHECK ----
+    if request_line.startswith("HEAD") or request_line.startswith("GET / ") and \
+       not any("Upgrade: websocket" in h for h in headers):
         response = (
             "HTTP/1.1 200 OK\r\n"
             "Content-Type: text/plain\r\n"
@@ -34,9 +47,23 @@ async def connection_handler(reader, writer):
         writer.close()
         return
 
-    # Otherwise handle WebSocket upgrade
-    ws_server = websockets.server.ServerConnection(websocket_handler)
-    await ws_server.handler(reader, writer)
+    # ---- WEBSOCKET REQUEST ----
+    if any("Upgrade: websocket" in h for h in headers):
+        ws_server = websockets.server.ServerConnection(websocket_handler)
+        await ws_server.handler(reader, writer)
+        return
+
+    # ---- UNKNOWN REQUEST: return OK ----
+    response = (
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: text/plain\r\n"
+        "Content-Length: 2\r\n"
+        "\r\n"
+        "OK"
+    )
+    writer.write(response.encode())
+    await writer.drain()
+    writer.close()
 
 
 async def main():
