@@ -1,103 +1,51 @@
 import asyncio
 import websockets
 import os
-import json
-import sqlite3
-from datetime import datetime
-
-DB = "chat.db"
-
-# --------------------------- DATABASE SETUP ---------------------------
-
-def init_db():
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT,
-            text TEXT,
-            timestamp TEXT
-        )
-    """)
-    conn.commit()
-    conn.close()
-
-def save_message(username, text, timestamp):
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
-    c.execute("INSERT INTO messages (username, text, timestamp) VALUES (?, ?, ?)",
-              (username, text, timestamp))
-    conn.commit()
-    conn.close()
-
-def load_messages(limit=50):
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
-    c.execute("SELECT username, text, timestamp FROM messages ORDER BY id DESC LIMIT ?", (limit,))
-    rows = c.fetchall()
-    conn.close()
-    rows.reverse()
-    return rows
-
-# --------------------------- CHAT SERVER ---------------------------
 
 clients = set()
 
-async def broadcast(obj, exclude=None):
-    message = json.dumps(obj)
-    await asyncio.gather(
-        *(c.send(message) for c in clients if c != exclude),
-        return_exceptions=True
-    )
-
-async def handle(ws):
+async def websocket_handler(ws):
     clients.add(ws)
-
-    # Send last 50 messages on connect
-    history = load_messages()
-    await ws.send(json.dumps({"type": "history", "messages": history}))
-
     try:
         async for msg in ws:
-            data = json.loads(msg)
-
-            username = data.get("username")
-            text = data.get("text")
-            timestamp = datetime.utcnow().isoformat()
-
-            # Save message
-            save_message(username, text, timestamp)
-
-            # Broadcast to others
-            await broadcast({
-                "type": "message",
-                "username": username,
-                "text": text,
-                "timestamp": timestamp
-            }, exclude=ws)
-
-    except websockets.exceptions.ConnectionClosed:
-        pass
+            # broadcast to every other client
+            await asyncio.gather(*[
+                c.send(msg) for c in clients if c != ws
+            ], return_exceptions=True)
     finally:
         clients.remove(ws)
 
-# --------------------------- SERVER BOOT ---------------------------
+
+async def connection_handler(reader, writer):
+    request_line = await reader.readline()
+    line = request_line.decode().strip()
+
+    # Render health check (GET / or HEAD /)
+    if line.startswith("HEAD") or (line.startswith("GET") and "Upgrade: websocket" not in line):
+        response = (
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Type: text/plain\r\n"
+            "Content-Length: 2\r\n"
+            "\r\n"
+            "OK"
+        )
+        writer.write(response.encode())
+        await writer.drain()
+        writer.close()
+        return
+
+    # Otherwise handle WebSocket upgrade
+    ws_server = websockets.server.ServerConnection(websocket_handler)
+    await ws_server.handler(reader, writer)
+
 
 async def main():
-    init_db()
-
     PORT = int(os.environ.get("PORT", 10000))
-    print(f"WebSocket server starting on port {PORT}")
+    server = await asyncio.start_server(connection_handler, "0.0.0.0", PORT)
+    print(f"Server running on port {PORT}")
+    async with server:
+        await server.serve_forever()
 
-    async with websockets.serve(
-        handle,
-        "0.0.0.0",
-        PORT,
-        ping_interval=20,
-        ping_timeout=20
-    ):
-        await asyncio.Future()  # keep alive
 
 if __name__ == "__main__":
     asyncio.run(main())
