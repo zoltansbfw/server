@@ -1,4 +1,5 @@
 import os
+import re
 from datetime import datetime
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 import uvicorn
@@ -70,6 +71,21 @@ def handle_command(command: str, username: str):
     return "Unknown command. Type /help"
 
 
+# --- NEW: message formatter ---
+def format_message(msg: str) -> str:
+    # Bold: **text**
+    msg = re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", msg)
+    # Italic: *text*
+    msg = re.sub(r"\*(.*?)\*", r"<i>\1</i>", msg)
+    # Underline: __text__
+    msg = re.sub(r"__(.*?)__", r"<u>\1</u>", msg)
+    # Strikethrough: ~~text~~
+    msg = re.sub(r"~~(.*?)~~", r"<s>\1</s>", msg)
+    # Inline code: `text`
+    msg = re.sub(r"`(.*?)`", r"<code>\1</code>", msg)
+    return msg
+
+
 @app.get("/")
 async def health_check():
     return {"status": "ok"}
@@ -91,8 +107,11 @@ async def websocket_endpoint(websocket: WebSocket):
                     await websocket.send_text(response)
                 continue
 
+            # Apply formatting
+            styled_msg = format_message(msg)
+
             timestamp = chat_server._timestamp()
-            full_msg = f"[{timestamp}] {username}: {msg}"
+            full_msg = f"[{timestamp}] {username}: {styled_msg}"
 
             chat_server.message_history.append(full_msg)
             await chat_server.broadcast(full_msg)
