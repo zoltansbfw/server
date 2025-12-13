@@ -1,5 +1,6 @@
 import os
 import re
+import asyncio
 from datetime import datetime
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 import uvicorn
@@ -8,7 +9,8 @@ app = FastAPI()
 
 
 class ChatServer:
-    def __init__(self):
+    def __init__(self, name: str):
+        self.name = name
         self.active_connections: dict[WebSocket, str] = {}
         self.message_history: list[str] = []
 
@@ -20,9 +22,9 @@ class ChatServer:
         for message in self.message_history:
             await websocket.send_text(message)
 
-        # Announce join (bold)
+        # Announce join
         timestamp = self._timestamp()
-        join_msg = f"<b>[{timestamp}] {username} joined the chat</b>"
+        join_msg = f"<b>[{timestamp}] {username} joined #{self.name}</b>"
         self.message_history.append(join_msg)
         await self.broadcast(join_msg)
 
@@ -31,23 +33,45 @@ class ChatServer:
         self.active_connections.pop(websocket, None)
 
         timestamp = self._timestamp()
-        leave_msg = f"<b>[{timestamp}] {username} left the chat</b>"
+        leave_msg = f"<b>[{timestamp}] {username} left #{self.name}</b>"
         self.message_history.append(leave_msg)
         return leave_msg
 
     async def broadcast(self, message: str):
-        for connection in self.active_connections:
-            await connection.send_text(message)
+        for connection in list(self.active_connections.keys()):
+            try:
+                await connection.send_text(message)
+            except Exception:
+                # drop broken connections
+                self.active_connections.pop(connection, None)
 
     @staticmethod
     def _timestamp():
         return datetime.now().strftime("%H:%M")
 
 
-chat_server = ChatServer()
+# --- Channels registry ---
+channels: dict[str, ChatServer] = {}
 
 
-def handle_command(command: str, username: str):
+def get_channel(name: str) -> ChatServer:
+    if name not in channels:
+        channels[name] = ChatServer(name)
+    return channels[name]
+
+
+# --- Message formatter ---
+def format_message(msg: str) -> str:
+    msg = re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", msg)   # Bold
+    msg = re.sub(r"\*(.*?)\*", r"<i>\1</i>", msg)       # Italic
+    msg = re.sub(r"__(.*?)__", r"<u>\1</u>", msg)       # Underline
+    msg = re.sub(r"~~(.*?)~~", r"<s>\1</s>", msg)       # Strikethrough
+    msg = re.sub(r"`(.*?)`", r"<code>\1</code>", msg)   # Inline code
+    return msg
+
+
+# --- Commands ---
+def handle_command(command: str, username: str, channel: ChatServer):
     cmd = command.lower().strip()
 
     if cmd == "/help":
@@ -59,31 +83,16 @@ def handle_command(command: str, username: str):
         )
 
     if cmd == "/users":
-        users = ", ".join(chat_server.active_connections.values())
-        return f"[Users online] {users}"
+        users = ", ".join(channel.active_connections.values())
+        return f"[Users online in #{channel.name}] {users}"
 
     if cmd == "/clear":
         if username != "admin":
             return "Only admin can clear the chat."
-        chat_server.message_history.clear()
-        return "<b>Chat was cleared by admin</b>"
+        channel.message_history.clear()
+        return f"<b>Chat in #{channel.name} was cleared by admin</b>"
 
     return "Unknown command. Type /help"
-
-
-# --- NEW: message formatter ---
-def format_message(msg: str) -> str:
-    # Bold: **text**
-    msg = re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", msg)
-    # Italic: *text*
-    msg = re.sub(r"\*(.*?)\*", r"<i>\1</i>", msg)
-    # Underline: __text__
-    msg = re.sub(r"__(.*?)__", r"<u>\1</u>", msg)
-    # Strikethrough: ~~text~~
-    msg = re.sub(r"~~(.*?)~~", r"<s>\1</s>", msg)
-    # Inline code: `text`
-    msg = re.sub(r"`(.*?)`", r"<code>\1</code>", msg)
-    return msg
 
 
 @app.get("/")
@@ -94,7 +103,10 @@ async def health_check():
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     username = websocket.query_params.get("username", "Anonymous")
-    await chat_server.connect(websocket, username)
+    channel_name = websocket.query_params.get("channel", "general")
+    channel = get_channel(channel_name)
+
+    await channel.connect(websocket, username)
 
     try:
         while True:
@@ -102,7 +114,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
             # Commands
             if msg.startswith("/"):
-                response = handle_command(msg, username)
+                response = handle_command(msg, username, channel)
                 if response:
                     await websocket.send_text(response)
                 continue
@@ -110,15 +122,27 @@ async def websocket_endpoint(websocket: WebSocket):
             # Apply formatting
             styled_msg = format_message(msg)
 
-            timestamp = chat_server._timestamp()
+            timestamp = channel._timestamp()
             full_msg = f"[{timestamp}] {username}: {styled_msg}"
 
-            chat_server.message_history.append(full_msg)
-            await chat_server.broadcast(full_msg)
+            channel.message_history.append(full_msg)
+            await channel.broadcast(full_msg)
 
     except WebSocketDisconnect:
-        leave_msg = chat_server.disconnect(websocket)
-        await chat_server.broadcast(leave_msg)
+        leave_msg = channel.disconnect(websocket)
+        await channel.broadcast(leave_msg)
+
+
+# --- Auto clear every hour ---
+@app.on_event("startup")
+async def clear_task():
+    async def clear_loop():
+        while True:
+            await asyncio.sleep(3600)  # 1 hour
+            for channel in channels.values():
+                channel.message_history.clear()
+                await channel.broadcast("<b>Chat was automatically cleared</b>")
+    asyncio.create_task(clear_loop())
 
 
 if __name__ == "__main__":
