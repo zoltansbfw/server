@@ -1,105 +1,48 @@
-import socket
-import selectors
+import os
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+import uvicorn
+
+app = FastAPI()
 
 
 class ChatServer:
-    def __init__(self, host, port):
-        """Initialise the server attributes."""
-        self._host = host
-        self._port = port
-        self._socket = None
+    def __init__(self):
+        self.active_connections: list[WebSocket] = []
 
-        # Selector for sockets we read from
-        self._read_selector = selectors.DefaultSelector()
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
 
-        # Selector for sockets we write to (clients only)
-        self._write_selector = selectors.DefaultSelector()
+    def disconnect(self, websocket: WebSocket):
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
 
-    def _init_server(self):
-        """Initialises the server socket."""
-        self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self._socket.bind((self._host, self._port))
-        self._socket.listen()
+    async def broadcast(self, message: str, sender: WebSocket):
+        for connection in self.active_connections:
+            if connection is not sender:
+                await connection.send_text(message)
 
-        # Register server socket to accept new connections
-        self._read_selector.register(
-            self._socket,
-            selectors.EVENT_READ,
-            self._accept_connection,
-        )
 
-        print(f"Server listening on {self._host}:{self._port}")
+chat_server = ChatServer()
 
-    def _accept_connection(self, sock):
-        """Accept a new client connection."""
-        client, addr = sock.accept()
-        print(f"Client connected from {addr}")
 
-        # Register client for reading messages
-        self._read_selector.register(
-            client,
-            selectors.EVENT_READ,
-            self._receive_message,
-        )
+@app.get("/")
+async def health_check():
+    return {"status": "ok"}
 
-        # Register client for writing (broadcasting)
-        self._write_selector.register(
-            client,
-            selectors.EVENT_WRITE,
-        )
 
-    def _receive_message(self, sock):
-        """Receive a message from a client and broadcast it."""
-        try:
-            msg = sock.recv(1024)
-        except ConnectionResetError:
-            msg = b""
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await chat_server.connect(websocket)
 
-        # Client disconnected
-        if not msg:
-            print("Client disconnected")
-            self._cleanup_client(sock)
-            return
-
-        print(msg.decode("utf8"))
-
-        # Broadcast message to all other clients
-        for key, _ in self._write_selector.select(0):
-            client_sock = key.fileobj
-            if client_sock is not sock:
-                try:
-                    client_sock.send(msg)
-                except BrokenPipeError:
-                    self._cleanup_client(client_sock)
-
-    def _cleanup_client(self, sock):
-        """Remove a disconnected client."""
-        try:
-            self._read_selector.unregister(sock)
-        except Exception:
-            pass
-
-        try:
-            self._write_selector.unregister(sock)
-        except Exception:
-            pass
-
-        sock.close()
-
-    def run(self):
-        """Starts the server and runs indefinitely."""
-        self._init_server()
-        print("Running server...")
-
+    try:
         while True:
-            for key, _ in self._read_selector.select():
-                callback = key.data
-                callback(key.fileobj)
+            message = await websocket.receive_text()
+            await chat_server.broadcast(message, websocket)
+    except WebSocketDisconnect:
+        chat_server.disconnect(websocket)
 
 
 if __name__ == "__main__":
-    # IMPORTANT for Render:
-    # host must be 0.0.0.0, not localhost
-    server = ChatServer("0.0.0.0", 7342)
-    server.run()
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
