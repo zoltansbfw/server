@@ -1,46 +1,105 @@
-import asyncio
-import websockets
-import os
-import signal
+import socket
+import selectors
 
-# Set of connected clients
-clients = set()
 
-async def register(websocket):
-    """Registers a client connection."""
-    clients.add(websocket)
-    print(f"Client connected. Total clients: {len(clients)}")
+class ChatServer:
+    def __init__(self, host, port):
+        """Initialise the server attributes."""
+        self._host = host
+        self._port = port
+        self._socket = None
 
-async def unregister(websocket):
-    """Unregisters a client connection."""
-    clients.remove(websocket)
-    print(f"Client disconnected. Total clients: {len(clients)}")
+        # Selector for sockets we read from
+        self._read_selector = selectors.DefaultSelector()
 
-async def consumer_handler(websocket):
-    """Handles messages received from a client and broadcasts them."""
-    async for message in websocket:
-        # Broadcast the message to all other connected clients
-        await asyncio.gather(*[
-            client.send(message) for client in clients if client != websocket
-        ], return_exceptions=True)
+        # Selector for sockets we write to (clients only)
+        self._write_selector = selectors.DefaultSelector()
 
-async def handler(websocket):
-    """Main handler that manages connection lifecycle."""
-    await register(websocket)
-    try:
-        await consumer_handler(websocket)
-    finally:
-        await unregister(websocket)
+    def _init_server(self):
+        """Initialises the server socket."""
+        self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._socket.bind((self._host, self._port))
+        self._socket.listen()
 
-async def main():
-    PORT = int(os.environ.get("PORT", 10000))
-    # 'ws://0.0.0.0:{PORT}'
-    
-    # Corrected usage: serve is directly under the websockets module
-    async with websockets.serve(handler, "0.0.0.0", PORT):
-        print(f"Server running on port {PORT}")
-        await asyncio.Future()  # Run forever
+        # Register server socket to accept new connections
+        self._read_selector.register(
+            self._socket,
+            selectors.EVENT_READ,
+            self._accept_connection,
+        )
+
+        print(f"Server listening on {self._host}:{self._port}")
+
+    def _accept_connection(self, sock):
+        """Accept a new client connection."""
+        client, addr = sock.accept()
+        print(f"Client connected from {addr}")
+
+        # Register client for reading messages
+        self._read_selector.register(
+            client,
+            selectors.EVENT_READ,
+            self._receive_message,
+        )
+
+        # Register client for writing (broadcasting)
+        self._write_selector.register(
+            client,
+            selectors.EVENT_WRITE,
+        )
+
+    def _receive_message(self, sock):
+        """Receive a message from a client and broadcast it."""
+        try:
+            msg = sock.recv(1024)
+        except ConnectionResetError:
+            msg = b""
+
+        # Client disconnected
+        if not msg:
+            print("Client disconnected")
+            self._cleanup_client(sock)
+            return
+
+        print(msg.decode("utf8"))
+
+        # Broadcast message to all other clients
+        for key, _ in self._write_selector.select(0):
+            client_sock = key.fileobj
+            if client_sock is not sock:
+                try:
+                    client_sock.send(msg)
+                except BrokenPipeError:
+                    self._cleanup_client(client_sock)
+
+    def _cleanup_client(self, sock):
+        """Remove a disconnected client."""
+        try:
+            self._read_selector.unregister(sock)
+        except Exception:
+            pass
+
+        try:
+            self._write_selector.unregister(sock)
+        except Exception:
+            pass
+
+        sock.close()
+
+    def run(self):
+        """Starts the server and runs indefinitely."""
+        self._init_server()
+        print("Running server...")
+
+        while True:
+            for key, _ in self._read_selector.select():
+                callback = key.data
+                callback(key.fileobj)
+
 
 if __name__ == "__main__":
-    # Corrected usage: Use asyncio.run() to manage the event loop
-    asyncio.run(main())
+    # IMPORTANT for Render:
+    # host must be 0.0.0.0, not localhost
+    server = ChatServer("0.0.0.0", 7342)
+    server.run()
