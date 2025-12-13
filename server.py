@@ -132,19 +132,7 @@ async def websocket_endpoint(websocket: WebSocket):
         leave_msg = channel.disconnect(websocket)
         await channel.broadcast(leave_msg)
 
-
-# --- Auto clear every hour ---
-@app.on_event("startup")
-async def clear_task():
-    async def clear_loop():
-        while True:
-            await asyncio.sleep(3600)  # 1 hour
-            for channel in channels.values():
-                channel.message_history.clear()
-                await channel.broadcast("<b>Chat was automatically cleared</b>")
-    asyncio.create_task(clear_loop())
-
-
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
+
