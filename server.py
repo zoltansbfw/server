@@ -11,6 +11,19 @@ GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "YOUR_API_KEY_HERE")
 genai.configure(api_key=GEMINI_KEY)
 ai_model = genai.GenerativeModel('gemini-3.5-flash')
 
+# Define your AI's custom personality here!
+BOT_PERSONALITY = (
+    "You are 'Shiny Geoff', you're a pretty wise old man who speaks like a roadman"
+    "You use terms like wagwan, peak and init. You hate Paiger and love Koz"
+    "Keep your anwsers relatively long"
+    "every once in a while post this gif without quotation marks "https://tenor.com/view/vince-mcmahon-wwe-hush-money-gif-26003600.gif""
+)
+
+ai_model = genai.GenerativeModel(
+    'gemini-3.5-flash',
+    system_instruction=BOT_PERSONALITY
+)
+
 app = FastAPI()
 
 
@@ -140,6 +153,10 @@ async def websocket_endpoint(websocket: WebSocket):
                 user_msg = f"[{timestamp}] {username}: {styled_prompt}"
                 channel.message_history.append(user_msg)
                 await channel.broadcast(user_msg)
+                
+                # 2. Let the chat know the AI is thinking (optional but good UX)
+                thinking_msg = f"[{timestamp}] <i>Shiny Geoff is thinking...</i>"
+                await channel.broadcast(thinking_msg)
                 
                 # 3. Request completion from Gemini API
                 # (Executed via thread pool loop to avoid locking the event loop)
