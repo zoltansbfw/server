@@ -140,11 +140,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 user_msg = f"[{timestamp}] {username}: {styled_prompt}"
                 channel.message_history.append(user_msg)
                 await channel.broadcast(user_msg)
-
-                # 2. Let the chat know the bot is drafting a response
-                thinking_msg = f"[{timestamp}] <i>SpongeBot AI is thinking...</i>"
-                await channel.broadcast(thinking_msg)
-
+                
                 # 3. Request completion from Gemini API
                 # (Executed via thread pool loop to avoid locking the event loop)
                 try:
@@ -152,6 +148,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     response = await loop.run_in_executor(None, ai_model.generate_content, prompt)
                     ai_text = response.text
                 except Exception as e:
+                    print(f"!!! GEMINI API ERROR: {e}")
                     ai_text = "Sorry, I had trouble processing that request."
 
                 # 4. Broadcast the final AI output back to the channel
