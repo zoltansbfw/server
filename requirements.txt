@@ -1,3 +1,4 @@
 websockets
 fastapi
 uvicorn
+google-generativeai
