@@ -4,6 +4,12 @@ import asyncio
 from datetime import datetime
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 import uvicorn
+import google.generativeai as genai
+
+# --- AI Configuration ---
+GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "AQ.Ab8RN6IQeAPo703YEPfe72_UpoWZ-J8RiouxBNqP4U76SZeWmw")
+genai.configure(api_key=GEMINI_KEY)
+ai_model = genai.GenerativeModel('gemini-1.5-flash')
 
 app = FastAPI()
 
@@ -79,6 +85,7 @@ def handle_command(command: str, username: str, channel: ChatServer):
             "[Commands]\n"
             "/help  - show this message\n"
             "/users - list online users\n"
+            "/ai [prompt] - Ask SpongeBot AI something\n"
             "/clear - clear chat (admin only)"
         )
 
@@ -112,14 +119,52 @@ async def websocket_endpoint(websocket: WebSocket):
         while True:
             msg = await websocket.receive_text()
 
-            # Commands
-            if msg.startswith("/"):
+            # Process typical commands (excluding AI commands)
+            if msg.startswith("/") and not msg.startswith("/ai "):
                 response = handle_command(msg, username, channel)
                 if response:
                     await websocket.send_text(response)
                 continue
 
-            # Apply formatting
+            # --- AI Command Integration ---
+            if msg.startswith("/ai "):
+                prompt = msg[4:].strip()
+                timestamp = channel._timestamp()
+                
+                if not prompt:
+                    await websocket.send_text("Please provide a prompt after /ai")
+                    continue
+                
+                # 1. Broadcast the user's prompt so everyone in the room sees it
+                styled_prompt = format_message(msg)
+                user_msg = f"[{timestamp}] {username}: {styled_prompt}"
+                channel.message_history.append(user_msg)
+                await channel.broadcast(user_msg)
+
+                # 2. Let the chat know the bot is drafting a response
+                thinking_msg = f"[{timestamp}] <i>SpongeBot AI is thinking...</i>"
+                await channel.broadcast(thinking_msg)
+
+                # 3. Request completion from Gemini API
+                # (Executed via thread pool loop to avoid locking the event loop)
+                try:
+                    loop = asyncio.get_event_loop()
+                    response = await loop.run_in_executor(None, ai_model.generate_content, prompt)
+                    ai_text = response.text
+                except Exception as e:
+                    ai_text = "Sorry, I had trouble processing that request."
+
+                # 4. Broadcast the final AI output back to the channel
+                new_timestamp = channel._timestamp()
+                ai_styled = format_message(ai_text)
+                ai_full_msg = f"[{new_timestamp}] <b>SpongeBot AI</b>: {ai_styled}"
+                
+                channel.message_history.append(ai_full_msg)
+                await channel.broadcast(ai_full_msg)
+                continue
+            # -------------------------------
+
+            # Apply formatting for regular non-command messages
             styled_msg = format_message(msg)
 
             timestamp = channel._timestamp()
@@ -135,4 +180,3 @@ async def websocket_endpoint(websocket: WebSocket):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
-
