@@ -87,7 +87,7 @@ def format_message(msg: str) -> str:
     msg = re.sub(r"__(.*?)__", r"<u>\1</u>", msg)       # Underline
     msg = re.sub(r"~~(.*?)~~", r"<s>\1</s>", msg)       # Strikethrough
     msg = re.sub(r"`(.*?)`", r"<code>\1</code>", msg)   # Inline code
-    msg = msg.replace("\n", "<br>")
+    msg = re.sub(r"\n", r"<br>", msg)                   # Inline code
     return msg
 
 
