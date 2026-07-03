@@ -154,7 +154,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 # 4. Broadcast the final AI output back to the channel
                 new_timestamp = channel._timestamp()
                 ai_styled = format_message(ai_text)
-                ai_full_msg = f"[{new_timestamp}] <b>SpongeBot AI</b>: {ai_styled}"
+                ai_full_msg = f"[{new_timestamp}] <b>Shiny Geoff</b>: {ai_styled}"
                 
                 channel.message_history.append(ai_full_msg)
                 await channel.broadcast(ai_full_msg)
