@@ -7,7 +7,7 @@ import uvicorn
 import google.generativeai as genai
 
 # --- AI Configuration ---
-GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "AQ.Ab8RN6IQeAPo703YEPfe72_UpoWZ-J8RiouxBNqP4U76SZeWmw")
+GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "YOUR_API_KEY_HERE")
 genai.configure(api_key=GEMINI_KEY)
 ai_model = genai.GenerativeModel('gemini-1.5-flash')
 
