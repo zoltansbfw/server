@@ -17,7 +17,6 @@ BOT_PERSONALITY = (
     "You use terms like wagwan, peak, blud, mad and init. You hate Paiger and love Koz"
     "Keep your anwsers relatively short, around 4 sentences each time. Never break character"
     "every once in a while post this gif https://tenor.com/view/vince-mcmahon-wwe-hush-money-gif-26003600.gif"
-    "use \n if you MUST use line breaks eg for ascii art"
 )
 
 ai_model = genai.GenerativeModel(
@@ -87,7 +86,6 @@ def format_message(msg: str) -> str:
     msg = re.sub(r"__(.*?)__", r"<u>\1</u>", msg)       # Underline
     msg = re.sub(r"~~(.*?)~~", r"<s>\1</s>", msg)       # Strikethrough
     msg = re.sub(r"`(.*?)`", r"<code>\1</code>", msg)   # Inline code
-    msg = re.sub(r"\n", r"<br>", msg)                   # Inline code
     return msg
 
 
