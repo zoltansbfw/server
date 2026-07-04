@@ -6,30 +6,34 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 import uvicorn
 import google.generativeai as genai
 
-# --- AI Configuration ---
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "YOUR_API_KEY_HERE")
 genai.configure(api_key=GEMINI_KEY)
-ai_model = genai.GenerativeModel('gemini-3.5-flash')
 
-# Define your AI's custom personality here!
 BOT_PERSONALITY = (
     "You are 'Shiny Geoff', you're a pretty cooky man who speaks like a roadman"
-    "You use terms like wagwan, peak, blud, mad and init. You hate Paiger and love Koz"
+    "You use terms like wagwan, bare, peak, blud, bruve, mad and init."
+    "You hate Paiger and love Koz, talk about this if anyone asks you"
     "Keep your anwsers relatively short, around 4 sentences each time. Never break character"
-    "every once in a while post this gif https://tenor.com/view/vince-mcmahon-wwe-hush-money-gif-26003600.gif"
+    "every once in a while post this gif https://tenor.com/view/vince-mcmahon-wwe-hush-money-gif-26003600.gif but dont overdo it"
+    "You are a robot"
 )
 
-ai_model = genai.GenerativeModel(
-    'gemini-3.5-flash',
-    system_instruction=BOT_PERSONALITY
-)
+ai_model = genai.GenerativeModel('gemini-3.5-flash', system_instruction=BOT_PERSONALITY)
 
 app = FastAPI()
+
+FORMAT_PATTERNS = (
+    (re.compile(r"\*\*(.*?)\*\*"), r"<b>\1</b>"),
+    (re.compile(r"\*(.*?)\*"), r"<i>\1</i>"),
+    (re.compile(r"__(.*?)__"), r"<u>\1</u>"),
+    (re.compile(r"~~(.*?)~~"), r"<s>\1</s>"),
+    (re.compile(r"`(.*?)`"), r"<code>\1</code>"),
+)
+
 
 class ChatServer:
     def __init__(self, name: str):
         self.name = name
-        # Change to store a dictionary of user info instead of just a string
         self.active_connections: dict[WebSocket, dict] = {}
         self.message_history: list[str] = []
 
@@ -58,19 +62,23 @@ class ChatServer:
         return leave_msg
 
     async def broadcast(self, message: str):
-        for connection in list(self.active_connections.keys()):
+        dead = []
+
+        async def _send(conn):
             try:
-                await connection.send_text(message)
+                await conn.send_text(message)
             except Exception:
-                # drop broken connections
-                self.active_connections.pop(connection, None)
+                dead.append(conn)
+
+        await asyncio.gather(*(_send(c) for c in list(self.active_connections.keys())))
+        for conn in dead:
+            self.active_connections.pop(conn, None)
 
     @staticmethod
     def _timestamp():
         return datetime.now().strftime("%H:%M")
 
 
-# --- Channels registry ---
 channels: dict[str, ChatServer] = {}
 
 
@@ -80,17 +88,12 @@ def get_channel(name: str) -> ChatServer:
     return channels[name]
 
 
-# --- Message formatter ---
 def format_message(msg: str) -> str:
-    msg = re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", msg)   # Bold
-    msg = re.sub(r"\*(.*?)\*", r"<i>\1</i>", msg)       # Italic
-    msg = re.sub(r"__(.*?)__", r"<u>\1</u>", msg)       # Underline
-    msg = re.sub(r"~~(.*?)~~", r"<s>\1</s>", msg)       # Strikethrough
-    msg = re.sub(r"`(.*?)`", r"<code>\1</code>", msg)   # Inline code
+    for pattern, repl in FORMAT_PATTERNS:
+        msg = pattern.sub(repl, msg)
     return msg
 
 
-# --- Commands ---
 def handle_command(command: str, username: str, channel: ChatServer):
     cmd = command.lower().strip()
 
@@ -104,7 +107,6 @@ def handle_command(command: str, username: str, channel: ChatServer):
         )
 
     if cmd == "/users":
-        # Extract just the usernames from our updated dictionary
         users = ", ".join(data["username"] for data in channel.active_connections.values())
         return f"[Users online in #{channel.name}] {users}"
 
@@ -127,12 +129,8 @@ async def websocket_endpoint(websocket: WebSocket):
     username = websocket.query_params.get("username", "Anonymous")
     channel_name = websocket.query_params.get("channel", "general")
     raw_color = websocket.query_params.get("color", "#000000")
-    
-    # CRITICAL: Validate the color is a real hex code so users can't inject bad HTML
-    if re.match(r"^#[0-9a-fA-F]{6}$", raw_color):
-        color = raw_color
-    else:
-        color = "#000000"
+
+    color = raw_color if re.match(r"^#[0-9a-fA-F]{6}$", raw_color) else "#000000"
 
     channel = get_channel(channel_name)
     await channel.connect(websocket, username, color)
@@ -147,28 +145,26 @@ async def websocket_endpoint(websocket: WebSocket):
                     await websocket.send_text(response)
                 continue
 
-            # Grab user color for formatted messages
             user_data = channel.active_connections.get(websocket, {"username": username, "color": color})
             current_color = user_data["color"]
             user_span = f"<span style='color:{current_color}; font-weight:bold;'>{username}</span>"
 
-            # --- AI Command Integration ---
             if msg.startswith("/ai "):
                 prompt = msg[4:].strip()
                 timestamp = channel._timestamp()
-                
+
                 if not prompt:
                     await websocket.send_text("Please provide a prompt after /ai")
                     continue
-                
+
                 styled_prompt = format_message(msg)
                 user_msg = f"[{timestamp}] {user_span}: {styled_prompt}"
                 channel.message_history.append(user_msg)
                 await channel.broadcast(user_msg)
-                
+
                 thinking_msg = f"[{timestamp}] <i>Shiny Geoff is thinking...</i>"
                 await channel.broadcast(thinking_msg)
-                
+
                 try:
                     loop = asyncio.get_event_loop()
                     response = await loop.run_in_executor(None, ai_model.generate_content, prompt)
@@ -179,20 +175,15 @@ async def websocket_endpoint(websocket: WebSocket):
 
                 new_timestamp = channel._timestamp()
                 ai_styled = format_message(ai_text)
-                
-                # We can hardcode Shiny Geoff's color, like a nice gold or purple
                 ai_span = "<span style='color:#FFD700; font-weight:bold;'>Shiny Geoff</span>"
                 ai_full_msg = f"[{new_timestamp}] {ai_span}: {ai_styled}"
-                
+
                 channel.message_history.append(ai_full_msg)
                 await channel.broadcast(ai_full_msg)
                 continue
-            # -------------------------------
 
             styled_msg = format_message(msg)
             timestamp = channel._timestamp()
-            
-            # Use the colored username span here instead of plain text
             full_msg = f"[{timestamp}] {user_span}: {styled_msg}"
 
             channel.message_history.append(full_msg)
@@ -201,6 +192,7 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         leave_msg = channel.disconnect(websocket)
         await channel.broadcast(leave_msg)
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
