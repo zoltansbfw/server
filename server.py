@@ -26,33 +26,34 @@ ai_model = genai.GenerativeModel(
 
 app = FastAPI()
 
-
 class ChatServer:
     def __init__(self, name: str):
         self.name = name
-        self.active_connections: dict[WebSocket, str] = {}
+        # Change to store a dictionary of user info instead of just a string
+        self.active_connections: dict[WebSocket, dict] = {}
         self.message_history: list[str] = []
 
-    async def connect(self, websocket: WebSocket, username: str):
+    async def connect(self, websocket: WebSocket, username: str, color: str):
         await websocket.accept()
-        self.active_connections[websocket] = username
+        self.active_connections[websocket] = {"username": username, "color": color}
 
-        # Send chat history to the new user
         for message in self.message_history:
             await websocket.send_text(message)
 
-        # Announce join
         timestamp = self._timestamp()
-        join_msg = f"<b>[{timestamp}] {username} joined #{self.name}</b>"
+        user_span = f"<span style='color:{color}; font-weight:bold;'>{username}</span>"
+        join_msg = f"<b>[{timestamp}] {user_span} joined #{self.name}</b>"
         self.message_history.append(join_msg)
         await self.broadcast(join_msg)
 
     def disconnect(self, websocket: WebSocket):
-        username = self.active_connections.get(websocket, "Unknown")
-        self.active_connections.pop(websocket, None)
+        user_data = self.active_connections.pop(websocket, {"username": "Unknown", "color": "#000000"})
+        username = user_data["username"]
+        color = user_data["color"]
 
         timestamp = self._timestamp()
-        leave_msg = f"<b>[{timestamp}] {username} left #{self.name}</b>"
+        user_span = f"<span style='color:{color}; font-weight:bold;'>{username}</span>"
+        leave_msg = f"<b>[{timestamp}] {user_span} left #{self.name}</b>"
         self.message_history.append(leave_msg)
         return leave_msg
 
@@ -103,7 +104,8 @@ def handle_command(command: str, username: str, channel: ChatServer):
         )
 
     if cmd == "/users":
-        users = ", ".join(channel.active_connections.values())
+        # Extract just the usernames from our updated dictionary
+        users = ", ".join(data["username"] for data in channel.active_connections.values())
         return f"[Users online in #{channel.name}] {users}"
 
     if cmd == "/clear":
@@ -124,20 +126,31 @@ async def health_check():
 async def websocket_endpoint(websocket: WebSocket):
     username = websocket.query_params.get("username", "Anonymous")
     channel_name = websocket.query_params.get("channel", "general")
-    channel = get_channel(channel_name)
+    raw_color = websocket.query_params.get("color", "#000000")
+    
+    # CRITICAL: Validate the color is a real hex code so users can't inject bad HTML
+    if re.match(r"^#[0-9a-fA-F]{6}$", raw_color):
+        color = raw_color
+    else:
+        color = "#000000"
 
-    await channel.connect(websocket, username)
+    channel = get_channel(channel_name)
+    await channel.connect(websocket, username, color)
 
     try:
         while True:
             msg = await websocket.receive_text()
 
-            # Process typical commands (excluding AI commands)
             if msg.startswith("/") and not msg.startswith("/ai "):
                 response = handle_command(msg, username, channel)
                 if response:
                     await websocket.send_text(response)
                 continue
+
+            # Grab user color for formatted messages
+            user_data = channel.active_connections.get(websocket, {"username": username, "color": color})
+            current_color = user_data["color"]
+            user_span = f"<span style='color:{current_color}; font-weight:bold;'>{username}</span>"
 
             # --- AI Command Integration ---
             if msg.startswith("/ai "):
@@ -148,18 +161,14 @@ async def websocket_endpoint(websocket: WebSocket):
                     await websocket.send_text("Please provide a prompt after /ai")
                     continue
                 
-                # 1. Broadcast the user's prompt so everyone in the room sees it
                 styled_prompt = format_message(msg)
-                user_msg = f"[{timestamp}] {username}: {styled_prompt}"
+                user_msg = f"[{timestamp}] {user_span}: {styled_prompt}"
                 channel.message_history.append(user_msg)
                 await channel.broadcast(user_msg)
                 
-                # 2. Let the chat know the AI is thinking (optional but good UX)
                 thinking_msg = f"[{timestamp}] <i>Shiny Geoff is thinking...</i>"
                 await channel.broadcast(thinking_msg)
                 
-                # 3. Request completion from Gemini API
-                # (Executed via thread pool loop to avoid locking the event loop)
                 try:
                     loop = asyncio.get_event_loop()
                     response = await loop.run_in_executor(None, ai_model.generate_content, prompt)
@@ -168,21 +177,23 @@ async def websocket_endpoint(websocket: WebSocket):
                     print(f"!!! GEMINI API ERROR: {e}")
                     ai_text = "Sorry, I had trouble processing that request."
 
-                # 4. Broadcast the final AI output back to the channel
                 new_timestamp = channel._timestamp()
                 ai_styled = format_message(ai_text)
-                ai_full_msg = f"[{new_timestamp}] <b>Shiny Geoff</b>: {ai_styled}"
+                
+                # We can hardcode Shiny Geoff's color, like a nice gold or purple
+                ai_span = "<span style='color:#FFD700; font-weight:bold;'>Shiny Geoff</span>"
+                ai_full_msg = f"[{new_timestamp}] {ai_span}: {ai_styled}"
                 
                 channel.message_history.append(ai_full_msg)
                 await channel.broadcast(ai_full_msg)
                 continue
             # -------------------------------
 
-            # Apply formatting for regular non-command messages
             styled_msg = format_message(msg)
-
             timestamp = channel._timestamp()
-            full_msg = f"[{timestamp}] {username}: {styled_msg}"
+            
+            # Use the colored username span here instead of plain text
+            full_msg = f"[{timestamp}] {user_span}: {styled_msg}"
 
             channel.message_history.append(full_msg)
             await channel.broadcast(full_msg)
